@@ -61,6 +61,7 @@ var (
 	bannedSubdomains      = flag.String("sish.bannedsubdomains", "localhost", "A comma separated list of banned subdomains")
 	bannedIPs             = flag.String("sish.bannedips", "", "A comma separated list of banned ips")
 	bannedCountries       = flag.String("sish.bannedcountries", "", "A comma separated list of banned countries")
+	whitelistedSshIPs     = flag.String("sish.whitelistedSships", "", "A comma separated list of whitelisted ips to use for ssh ip filtering")
 	whitelistedIPs        = flag.String("sish.whitelistedips", "", "A comma separated list of whitelisted ips")
 	whitelistedCountries  = flag.String("sish.whitelistedcountries", "", "A comma separated list of whitelisted countries")
 	useGeoDB              = flag.Bool("sish.usegeodb", false, "Whether or not to use the maxmind geodb")
@@ -85,7 +86,9 @@ var (
 	serviceConsoleEnabled = flag.Bool("sish.serviceconsoleenabled", false, "Whether or not to enable the admin console for each service and send the info to users")
 	serviceConsoleToken   = flag.String("sish.serviceconsoletoken", "", "The token to use for service access. Auto generated if empty.")
 	bannedSubdomainList   = []string{""}
-	filter                *ipfilter.IPFilter
+
+	httpFilter *ipfilter.IPFilter
+	sshFilter  *ipfilter.IPFilter
 )
 
 func main() {
@@ -154,10 +157,21 @@ func main() {
 	}
 
 	if *useGeoDB {
-		filter = ipfilter.NewLazy(ipfilterOpts)
+		httpFilter = ipfilter.NewLazy(ipfilterOpts)
 	} else {
-		filter = ipfilter.NewNoDB(ipfilterOpts)
+		httpFilter = ipfilter.NewNoDB(ipfilterOpts)
 	}
+
+
+	whitelistedSshIPList := strings.FieldsFunc(*whitelistedSshIPs, commaSplitFields)
+
+	sshFilter = ipfilter.NewNoDB(ipfilter.Options{
+		BlockedCountries: upperList(*bannedCountries),
+		AllowedCountries: whitelistedCountriesList,
+		BlockedIPs:       strings.FieldsFunc(*bannedIPs, commaSplitFields),
+		AllowedIPs:       whitelistedSshIPList,
+		BlockByDefault:   len(whitelistedSshIPList) > 0 || len(whitelistedCountriesList) > 0,
+	})
 
 	watchCerts()
 
@@ -166,7 +180,7 @@ func main() {
 		Listeners:      &sync.Map{},
 		HTTPListeners:  &sync.Map{},
 		TCPListeners:   &sync.Map{},
-		IPFilter:       filter,
+		IPFilter:       httpFilter,
 		Console:        NewWebConsole(),
 	}
 
@@ -250,7 +264,7 @@ func main() {
 
 		clientRemote, _, err := net.SplitHostPort(conn.RemoteAddr().String())
 
-		if err != nil || filter.Blocked(clientRemote) {
+		if err != nil || sshFilter.Blocked(clientRemote) {
 			conn.Close()
 			continue
 		}
